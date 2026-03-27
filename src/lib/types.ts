@@ -41,14 +41,24 @@ export interface Smartphone {
   category: string[];
 
   // Affiliate links (admin input)
-  link_shopee: string[] | null;
-  link_tiktok: string[] | null;
+  link_shopee: string | null;
+  link_tiktok: string | null;
   link_official: string | null;
 
   // Metadata
-  source: 'rapidapi' | 'manual';
+  source: 'rapidapi' | 'manual' | 'groq_ai';
   created_at: string;
   updated_at: string;
+}
+
+
+export interface AffiliateLink {
+  id: string;
+  smartphone_id: string;
+  platform: string;
+  url: string;
+  label: string | null;
+  created_at: string;
 }
 
 export interface WatchlistItem {

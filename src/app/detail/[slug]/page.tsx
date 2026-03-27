@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { ChevronLeft, Star, Zap, Camera, Battery, Monitor, Cpu, HardDrive, Bell, ShoppingCart, ExternalLink, Package, ArrowUpDown } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { Smartphone } from '@/lib/types';
+import { Smartphone, AffiliateLink } from '@/lib/types';
 import { formatRupiah, getDisplayPrice, formatAntutu, getSecondhandLinks, getRatingColor } from '@/lib/utils';
 import WatchlistModal from '@/components/WatchlistModal';
 
@@ -14,10 +14,21 @@ export default function DetailPage() {
   const [phone, setPhone] = useState<Smartphone | null>(null);
   const [loading, setLoading] = useState(true);
   const [showWatchlist, setShowWatchlist] = useState(false);
+  const [affiliateLinks, setAffiliateLinks] = useState<AffiliateLink[]>([]);
 
   useEffect(() => {
     supabase.from('smartphones').select('*').eq('slug', slug).single()
-      .then(({ data }) => { setPhone(data as Smartphone); setLoading(false); });
+      .then(({ data }) => {
+        setPhone(data as Smartphone);
+        setLoading(false);
+        if (data) {
+          supabase.from('affiliate_links')
+            .select('*')
+            .eq('smartphone_id', data.id)
+            .order('platform')
+            .then(({ data: links }) => setAffiliateLinks((links as AffiliateLink[]) || []));
+        }
+      });
   }, [slug]);
 
   if (loading) return (
@@ -121,28 +132,47 @@ export default function DetailPage() {
               )}
             </div>
 
-            <div className="flex flex-col gap-2">
-              {phone.link_shopee?.map((url, i) => (
-                <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                  className="btn-primary flex items-center justify-center gap-2">
-                  <ShoppingCart size={16} />
-                  Beli di Shopee{phone.link_shopee!.length > 1 ? ` #${i + 1}` : ''}
-                  <ExternalLink size={12} />
-                </a>
-              ))}
-              {phone.link_tiktok?.map((url, i) => (
-                <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                  className="btn-secondary flex items-center justify-center gap-2">
-                  <ShoppingCart size={16} />
-                  Beli di TikTok Shop{phone.link_tiktok!.length > 1 ? ` #${i + 1}` : ''}
-                  <ExternalLink size={12} />
-                </a>
-              ))}
-              <button onClick={() => setShowWatchlist(true)}
-                className="btn-ghost flex items-center justify-center gap-2 border border-border rounded-xl py-2.5">
-                <Bell size={15} />Tambah ke Watchlist
-              </button>
-            </div>
+            {/* Affiliate Links Table */}
+            {affiliateLinks.length > 0 ? (
+              <div className="card p-4">
+                <h3 className="font-semibold text-ink text-sm mb-3 flex items-center gap-2">
+                  <ShoppingCart size={14} className="text-accent" />
+                  Beli di
+                </h3>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left pb-2 text-ink-3 text-xs font-semibold uppercase">Platform</th>
+                      <th className="text-left pb-2 text-ink-3 text-xs font-semibold uppercase">Keterangan</th>
+                      <th className="pb-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {affiliateLinks.map((link, i) => (
+                      <tr key={link.id} className={i < affiliateLinks.length - 1 ? 'border-b border-border' : ''}>
+                        <td className="py-2.5 font-semibold text-ink">{link.platform}</td>
+                        <td className="py-2.5 text-ink-3 text-xs">{link.label || '-'}</td>
+                        <td className="py-2.5 text-right">
+                          <a href={link.url} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 bg-accent text-white text-xs px-3 py-1.5 rounded-lg hover:bg-accent/90 transition-colors">
+                            Beli<ExternalLink size={10} />
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="card p-4 text-center text-ink-3 text-sm">
+                Belum ada link pembelian tersedia
+              </div>
+            )}
+
+            <button onClick={() => setShowWatchlist(true)}
+              className="btn-ghost flex items-center justify-center gap-2 border border-border rounded-xl py-2.5 w-full">
+              <Bell size={15} />Tambah ke Watchlist
+            </button>
           </div>
         </div>
 

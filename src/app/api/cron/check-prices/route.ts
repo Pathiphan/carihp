@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
               <p style="font-size:28px;font-weight:800;color:#16A34A;margin:4px 0 0;">Rp ${currentPrice.toLocaleString('id-ID')}</p>
               ${item.target_price ? `<p style="font-size:12px;color:#6B7280;margin:8px 0 0;">Target kamu: Rp ${item.target_price.toLocaleString('id-ID')}</p>` : ''}
             </div>
-            <a href="${phone.link_shopee?.[0] ?? `${process.env.NEXT_PUBLIC_APP_URL}/detail/${phone.slug}`}"
+            <a href="${process.env.NEXT_PUBLIC_APP_URL}/detail/${phone.slug}"
               style="display:block;background:#2563EB;color:white;text-align:center;padding:14px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px;">
               Lihat & Beli Sekarang →
             </a>

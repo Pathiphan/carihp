@@ -170,3 +170,27 @@ INSERT INTO smartphones (
  64, 16, ARRAY['OIS','AI Scene Recognition','4K 30fps'],
  1050000, 1320, 4800, 8.0, 7.5, 8.2, 8.5, 9.5,
  ARRAY['gaming','budget'], 'manual');
+
+-- ============================================================
+-- TABEL AFFILIATE LINKS (banyak link per smartphone)
+-- Jalankan bagian ini di Supabase SQL Editor
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS affiliate_links (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  smartphone_id UUID NOT NULL REFERENCES smartphones(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  url TEXT NOT NULL,
+  label TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_affiliate_links_smartphone_id ON affiliate_links(smartphone_id);
+
+ALTER TABLE affiliate_links ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public can read affiliate_links" ON affiliate_links
+  FOR SELECT USING (true);
+
+CREATE POLICY "Service role can manage affiliate_links" ON affiliate_links
+  USING (true) WITH CHECK (true);

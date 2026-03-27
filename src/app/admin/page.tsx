@@ -1,57 +1,9 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Lock, Search, Edit2, Save, X, Plus, ExternalLink, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { Lock, Search, Edit2, Save, X, Plus, ExternalLink, Loader2, RefreshCw, Trash2, Link } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { Smartphone } from '@/lib/types';
+import { Smartphone, AffiliateLink } from '@/lib/types';
 import { formatRupiah, getDisplayPrice } from '@/lib/utils';
-
-// ── Multi-link editor ─────────────────────────────────────────────────────────
-function LinkListEditor({
-  links,
-  onChange,
-  placeholder,
-}: {
-  links: string[];
-  onChange: (links: string[]) => void;
-  placeholder: string;
-}) {
-  const update = (idx: number, val: string) => {
-    const next = [...links];
-    next[idx] = val;
-    onChange(next);
-  };
-  const remove = (idx: number) => onChange(links.filter((_, i) => i !== idx));
-  const add = () => onChange([...links, '']);
-
-  return (
-    <div className="space-y-1.5">
-      {links.map((link, idx) => (
-        <div key={idx} className="flex gap-1.5">
-          <input
-            type="text"
-            value={link}
-            placeholder={placeholder}
-            onChange={e => update(idx, e.target.value)}
-            className="bg-paper-3 border border-border text-ink text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-accent flex-1 min-w-0"
-          />
-          <button
-            onClick={() => remove(idx)}
-            className="text-gray-400 hover:text-red-500 transition-colors p-1 shrink-0"
-            title="Hapus link"
-          >
-            <Trash2 size={13} />
-          </button>
-        </div>
-      ))}
-      <button
-        onClick={add}
-        className="flex items-center gap-1 text-accent text-xs font-semibold hover:underline mt-0.5"
-      >
-        <Plus size={12} /> Tambah link
-      </button>
-    </div>
-  );
-}
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
@@ -66,30 +18,113 @@ export default function AdminPage() {
   const [fetching, setFetching] = useState(false);
   const [fetchMsg, setFetchMsg] = useState('');
 
+  // Affiliate links state
+  const [affiliateMap, setAffiliateMap] = useState<Record<string, AffiliateLink[]>>({});
+  const [editingAffiliate, setEditingAffiliate] = useState<string | null>(null);
+  const [newLinks, setNewLinks] = useState<{ platform: string; url: string; label: string }[]>([]);
+  const [savingAffiliate, setSavingAffiliate] = useState(false);
+  const [fixingImages, setFixingImages] = useState(false);
+  const [fixImageMsg, setFixImageMsg] = useState('');
+
   const handleLogin = async () => {
     const res = await fetch('/api/admin/auth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password }),
     });
-    if (res.ok) { setAuthed(true); }
+    if (res.ok) setAuthed(true);
     else alert('Password salah!');
   };
 
   const fetchPhones = async () => {
     setLoading(true);
-    const { data } = await supabase.from('smartphones').select('*')
-      .ilike('name', `%${search}%`).order('name');
+    const { data } = await supabase
+      .from('smartphones')
+      .select('*')
+      .ilike('name', `%${search}%`)
+      .order('name');
     setPhones((data as Smartphone[]) || []);
     setLoading(false);
   };
 
+  const fetchAffiliateLinks = async (phoneIds: string[]) => {
+    if (!phoneIds.length) return;
+    const { data } = await supabase
+      .from('affiliate_links')
+      .select('*')
+      .in('smartphone_id', phoneIds)
+      .order('platform');
+    if (data) {
+      const map: Record<string, AffiliateLink[]> = {};
+      for (const link of data as AffiliateLink[]) {
+        if (!map[link.smartphone_id]) map[link.smartphone_id] = [];
+        map[link.smartphone_id].push(link);
+      }
+      setAffiliateMap(map);
+    }
+  };
+
   useEffect(() => { if (authed) fetchPhones(); }, [search, authed]);
+  useEffect(() => {
+    if (phones.length) fetchAffiliateLinks(phones.map(p => p.id));
+  }, [phones]);
 
   const saveEdit = async (id: string) => {
-    const { error } = await supabase.from('smartphones')
-      .update({ ...editData, updated_at: new Date().toISOString() }).eq('id', id);
-    if (!error) { setSaved('✓ Tersimpan!'); setTimeout(() => setSaved(''), 2000); setEditingId(null); fetchPhones(); }
+    const { error } = await supabase
+      .from('smartphones')
+      .update({ ...editData, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    if (!error) {
+      setSaved('Tersimpan!');
+      setTimeout(() => setSaved(''), 2000);
+      setEditingId(null);
+      fetchPhones();
+    }
+  };
+
+  const openAffiliateEdit = (phoneId: string) => {
+    setEditingAffiliate(phoneId);
+    setNewLinks([{ platform: '', url: '', label: '' }]);
+  };
+
+  const addNewLinkRow = () => {
+    setNewLinks(prev => [...prev, { platform: '', url: '', label: '' }]);
+  };
+
+  const removeNewLinkRow = (idx: number) => {
+    setNewLinks(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateNewLink = (idx: number, field: string, value: string) => {
+    setNewLinks(prev => prev.map((l, i) => i === idx ? { ...l, [field]: value } : l));
+  };
+
+  const saveAffiliateLinks = async (phoneId: string) => {
+    setSavingAffiliate(true);
+    const validLinks = newLinks.filter(l => l.platform.trim() && l.url.trim());
+    if (validLinks.length > 0) {
+      const { error } = await supabase.from('affiliate_links').insert(
+        validLinks.map(l => ({
+          smartphone_id: phoneId,
+          platform: l.platform.trim(),
+          url: l.url.trim(),
+          label: l.label.trim() || null,
+        }))
+      );
+      if (error) { alert('Gagal simpan: ' + error.message); setSavingAffiliate(false); return; }
+    }
+    setSavingAffiliate(false);
+    setEditingAffiliate(null);
+    setNewLinks([]);
+    fetchAffiliateLinks(phones.map(p => p.id));
+    setSaved('Link affiliate tersimpan!');
+    setTimeout(() => setSaved(''), 2000);
+  };
+
+  const deleteAffiliateLink = async (linkId: string, phoneId: string) => {
+    if (!confirm('Hapus link ini?')) return;
+    await supabase.from('affiliate_links').delete().eq('id', linkId);
+    fetchAffiliateLinks(phones.map(p => p.id));
   };
 
   const handleFetchPhone = async () => {
@@ -104,16 +139,35 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setFetchMsg(`✓ Berhasil! HP "${fetchName}" sudah ditambahkan ke database.`);
+        setFetchMsg(`Berhasil! HP "${data.name || fetchName}" sudah ditambahkan.`);
         setFetchName('');
         fetchPhones();
       } else {
-        setFetchMsg(`✗ ${data.error || 'Gagal fetch HP'}`);
+        setFetchMsg(`Gagal: ${data.error || 'Terjadi kesalahan'}`);
       }
     } catch {
-      setFetchMsg('✗ Terjadi kesalahan koneksi.');
+      setFetchMsg('Terjadi kesalahan koneksi.');
     }
     setFetching(false);
+  };
+
+
+  const fixMissingImages = async () => {
+    setFixingImages(true);
+    setFixImageMsg('Memproses...');
+    try {
+      const res = await fetch('/api/admin/fix-images', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setFixImageMsg(`Selesai! ${data.fixed} gambar diperbaiki dari ${data.total} HP.`);
+        fetchPhones();
+      } else {
+        setFixImageMsg('Gagal: ' + (data.error || 'Terjadi kesalahan'));
+      }
+    } catch {
+      setFixImageMsg('Terjadi kesalahan koneksi.');
+    }
+    setFixingImages(false);
   };
 
   const inputCls = 'bg-paper-3 border border-border text-ink text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-accent w-full';
@@ -146,8 +200,8 @@ export default function AdminPage() {
 
         {/* Fetch HP */}
         <div className="card p-5 mb-6">
-          <h2 className="font-display font-bold text-ink mb-1">Tambah HP Baru via RapidAPI</h2>
-          <p className="text-ink-3 text-sm mb-4">Ketik nama HP → sistem otomatis fetch spesifikasi & thumbnail dari GSMArena</p>
+          <h2 className="font-display font-bold text-ink mb-1">Tambah HP Baru</h2>
+          <p className="text-ink-3 text-sm mb-4">Ketik nama HP untuk fetch spesifikasi otomatis via AI + GSMArena</p>
           <div className="flex gap-3">
             <input type="text" placeholder="Contoh: Samsung Galaxy S25 Ultra" className="input flex-1"
               value={fetchName} onChange={e => setFetchName(e.target.value)}
@@ -155,12 +209,29 @@ export default function AdminPage() {
             <button onClick={handleFetchPhone} disabled={fetching}
               className="btn-primary flex items-center gap-2 whitespace-nowrap">
               {fetching ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-              Fetch HP
+              {fetching ? 'Mencari...' : 'Tambah HP'}
             </button>
           </div>
           {fetchMsg && (
-            <p className={`mt-2 text-sm font-medium ${fetchMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>
+            <p className={`mt-2 text-sm font-medium ${fetchMsg.startsWith('Berhasil') ? 'text-green-600' : 'text-red-500'}`}>
               {fetchMsg}
+            </p>
+          )}
+        </div>
+
+
+        {/* Fix Missing Images */}
+        <div className="card p-5 mb-6">
+          <h2 className="font-display font-bold text-ink mb-1">Perbaiki Gambar</h2>
+          <p className="text-ink-3 text-sm mb-4">Otomatis cari dan upload gambar untuk HP yang belum punya foto</p>
+          <button onClick={fixMissingImages} disabled={fixingImages}
+            className="btn-secondary flex items-center gap-2">
+            {fixingImages ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+            {fixingImages ? 'Memproses...' : 'Perbaiki Gambar Sekarang'}
+          </button>
+          {fixImageMsg && (
+            <p className={`mt-2 text-sm font-medium ${fixImageMsg.startsWith('Selesai') ? 'text-green-600' : fixImageMsg === 'Memproses...' ? 'text-blue-500' : 'text-red-500'}`}>
+              {fixImageMsg}
             </p>
           )}
         </div>
@@ -178,7 +249,7 @@ export default function AdminPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-paper-3 border-b border-border">
-                  {['Nama HP', 'Harga Tampil', 'Override Harga IDR', 'Link Shopee', 'Link TikTok', 'Aksi'].map(h => (
+                  {['Nama HP', 'Harga Tampil', 'Override Harga IDR', 'Link Affiliate', 'Aksi'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-ink-3 font-semibold text-xs uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>
@@ -187,111 +258,178 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={6} className="text-center py-10 text-ink-3">
+                  <tr><td colSpan={5} className="text-center py-10 text-ink-3">
                     <Loader2 size={20} className="animate-spin mx-auto" />
                   </td></tr>
                 ) : phones.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center py-10 text-ink-3">Tidak ada HP ditemukan</td></tr>
+                  <tr><td colSpan={5} className="text-center py-10 text-ink-3">Tidak ada HP ditemukan</td></tr>
                 ) : phones.map(phone => (
-                  <tr key={phone.id} className="border-b border-border hover:bg-paper-2 transition-colors">
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="font-semibold text-ink">{phone.name}</p>
-                        <p className="text-ink-3 text-xs">{phone.brand} • {phone.release_year} • {phone.source}</p>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-ink font-medium whitespace-nowrap">
-                      {formatRupiah(getDisplayPrice(phone))}
-                      {phone.price_idr_override && <span className="ml-1 text-xs text-green-600">(override)</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {editingId === phone.id ? (
-                        <input type="number" className={inputCls} style={{ width: '140px' }}
-                          defaultValue={phone.price_idr_override || ''}
-                          placeholder="Harga IDR"
-                          onChange={e => setEditData(p => ({ ...p, price_idr_override: Number(e.target.value) || null }))} />
-                      ) : (
-                        <span className="text-ink-3 text-xs">
-                          {phone.price_idr_override ? formatRupiah(phone.price_idr_override) : 'Pakai estimasi'}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 min-w-[220px]">
-                      {editingId === phone.id ? (
-                        <LinkListEditor
-                          links={editData.link_shopee ?? (phone.link_shopee || [])}
-                          onChange={links => setEditData(p => ({ ...p, link_shopee: links.filter(Boolean).length ? links : null }))}
-                          placeholder="https://shopee.co.id/..."
-                        />
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          {phone.link_shopee?.length ? (
-                            phone.link_shopee.map((url, i) => (
-                              <div key={i} className="flex items-center gap-1.5">
-                                <span className="text-green-600 text-xs font-semibold">#{i + 1}</span>
-                                <a href={url} target="_blank" rel="noopener noreferrer"
-                                  className="text-gray-400 hover:text-accent truncate max-w-[120px] text-xs" title={url}>
-                                  {url.replace(/https?:\/\//, '').slice(0, 20)}…
-                                </a>
-                                <a href={url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-accent shrink-0">
-                                  <ExternalLink size={10} />
-                                </a>
-                              </div>
-                            ))
-                          ) : (
+                  <>
+                    <tr key={phone.id} className="border-b border-border hover:bg-paper-2 transition-colors">
+                      {/* Nama */}
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="font-semibold text-ink">{phone.name}</p>
+                          <p className="text-ink-3 text-xs">{phone.brand} • {phone.release_year}</p>
+                        </div>
+                      </td>
+
+                      {/* Harga tampil */}
+                      <td className="px-4 py-3 text-ink font-medium whitespace-nowrap">
+                        {formatRupiah(getDisplayPrice(phone))}
+                        {phone.price_idr_override && <span className="ml-1 text-xs text-green-600">(override)</span>}
+                      </td>
+
+                      {/* Override harga */}
+                      <td className="px-4 py-3">
+                        {editingId === phone.id ? (
+                          <input type="number" className={inputCls} style={{ width: '140px' }}
+                            defaultValue={phone.price_idr_override || ''}
+                            placeholder="Harga IDR"
+                            onChange={e => setEditData(p => ({ ...p, price_idr_override: Number(e.target.value) || null }))} />
+                        ) : (
+                          <span className="text-ink-3 text-xs">
+                            {phone.price_idr_override ? formatRupiah(phone.price_idr_override) : 'Pakai estimasi'}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Affiliate links summary */}
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {(affiliateMap[phone.id] || []).length === 0 ? (
                             <span className="text-gray-400 text-xs">Belum ada</span>
+                          ) : (
+                            (affiliateMap[phone.id] || []).map(link => (
+                              <span key={link.id} className="inline-flex items-center gap-1 bg-accent/10 text-accent text-xs px-2 py-0.5 rounded-full">
+                                {link.platform}
+                                {link.label && <span className="text-ink-3">({link.label})</span>}
+                              </span>
+                            ))
                           )}
                         </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 min-w-[220px]">
-                      {editingId === phone.id ? (
-                        <LinkListEditor
-                          links={editData.link_tiktok ?? (phone.link_tiktok || [])}
-                          onChange={links => setEditData(p => ({ ...p, link_tiktok: links.filter(Boolean).length ? links : null }))}
-                          placeholder="https://www.tiktok.com/..."
-                        />
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          {phone.link_tiktok?.length ? (
-                            phone.link_tiktok.map((url, i) => (
-                              <div key={i} className="flex items-center gap-1.5">
-                                <span className="text-green-600 text-xs font-semibold">#{i + 1}</span>
-                                <a href={url} target="_blank" rel="noopener noreferrer"
-                                  className="text-gray-400 hover:text-accent truncate max-w-[120px] text-xs" title={url}>
-                                  {url.replace(/https?:\/\//, '').slice(0, 20)}…
-                                </a>
-                                <a href={url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-accent shrink-0">
-                                  <ExternalLink size={10} />
-                                </a>
-                              </div>
-                            ))
+                      </td>
+
+                      {/* Aksi */}
+                      <td className="px-4 py-3">
+                        <div className="flex gap-3">
+                          {editingId === phone.id ? (
+                            <>
+                              <button onClick={() => saveEdit(phone.id)}
+                                className="flex items-center gap-1 text-green-600 hover:text-green-700 text-xs font-semibold">
+                                <Save size={12} />Simpan
+                              </button>
+                              <button onClick={() => setEditingId(null)}
+                                className="flex items-center gap-1 text-ink-3 hover:text-ink text-xs">
+                                <X size={12} />Batal
+                              </button>
+                            </>
                           ) : (
-                            <span className="text-gray-400 text-xs">Belum ada</span>
+                            <>
+                              <button onClick={() => { setEditingId(phone.id); setEditData({}); }}
+                                className="flex items-center gap-1 text-ink-3 hover:text-accent text-xs font-medium transition-colors">
+                                <Edit2 size={12} />Edit Harga
+                              </button>
+                              <button onClick={() => editingAffiliate === phone.id ? setEditingAffiliate(null) : openAffiliateEdit(phone.id)}
+                                className="flex items-center gap-1 text-ink-3 hover:text-accent text-xs font-medium transition-colors">
+                                <Link size={12} />Affiliate
+                              </button>
+                            </>
                           )}
                         </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {editingId === phone.id ? (
-                        <div className="flex gap-2">
-                          <button onClick={() => saveEdit(phone.id)}
-                            className="flex items-center gap-1 text-green-600 hover:text-green-700 text-xs font-semibold">
-                            <Save size={12} />Simpan
-                          </button>
-                          <button onClick={() => setEditingId(null)}
-                            className="flex items-center gap-1 text-ink-3 hover:text-ink text-xs">
-                            <X size={12} />Batal
-                          </button>
-                        </div>
-                      ) : (
-                        <button onClick={() => { setEditingId(phone.id); setEditData({}); }}
-                          className="flex items-center gap-1 text-ink-3 hover:text-accent text-xs font-medium transition-colors">
-                          <Edit2 size={12} />Edit
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+
+                    {/* Affiliate editor row */}
+                    {editingAffiliate === phone.id && (
+                      <tr key={`${phone.id}-affiliate`} className="bg-paper-2 border-b border-border">
+                        <td colSpan={5} className="px-4 py-4">
+                          <div className="max-w-3xl">
+                            <h3 className="font-semibold text-ink text-sm mb-3">Link Affiliate — {phone.name}</h3>
+
+                            {/* Existing links */}
+                            {(affiliateMap[phone.id] || []).length > 0 && (
+                              <div className="mb-4">
+                                <p className="text-ink-3 text-xs mb-2 uppercase tracking-wider font-semibold">Link yang sudah ada</p>
+                                <table className="w-full text-sm border border-border rounded-lg overflow-hidden">
+                                  <thead>
+                                    <tr className="bg-paper-3">
+                                      <th className="text-left px-3 py-2 text-ink-3 text-xs font-semibold">Platform</th>
+                                      <th className="text-left px-3 py-2 text-ink-3 text-xs font-semibold">Label</th>
+                                      <th className="text-left px-3 py-2 text-ink-3 text-xs font-semibold">URL</th>
+                                      <th className="px-3 py-2"></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {(affiliateMap[phone.id] || []).map(link => (
+                                      <tr key={link.id} className="border-t border-border">
+                                        <td className="px-3 py-2 font-medium text-ink">{link.platform}</td>
+                                        <td className="px-3 py-2 text-ink-3 text-xs">{link.label || '-'}</td>
+                                        <td className="px-3 py-2">
+                                          <a href={link.url} target="_blank" rel="noopener noreferrer"
+                                            className="text-accent text-xs flex items-center gap-1 hover:underline">
+                                            {link.url.slice(0, 40)}{link.url.length > 40 ? '...' : ''}
+                                            <ExternalLink size={10} />
+                                          </a>
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          <button onClick={() => deleteAffiliateLink(link.id, phone.id)}
+                                            className="text-red-400 hover:text-red-600 transition-colors">
+                                            <Trash2 size={13} />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            {/* New links form */}
+                            <p className="text-ink-3 text-xs mb-2 uppercase tracking-wider font-semibold">Tambah link baru</p>
+                            <div className="space-y-2 mb-3">
+                              {newLinks.map((link, idx) => (
+                                <div key={idx} className="flex gap-2 items-center">
+                                  <input type="text" placeholder="Platform (Shopee, Tokopedia, dll)"
+                                    className={inputCls} style={{ width: '180px' }}
+                                    value={link.platform}
+                                    onChange={e => updateNewLink(idx, 'platform', e.target.value)} />
+                                  <input type="text" placeholder="Label (opsional, misal: iBox Official)"
+                                    className={inputCls} style={{ width: '200px' }}
+                                    value={link.label}
+                                    onChange={e => updateNewLink(idx, 'label', e.target.value)} />
+                                  <input type="text" placeholder="https://..."
+                                    className={`${inputCls} flex-1`}
+                                    value={link.url}
+                                    onChange={e => updateNewLink(idx, 'url', e.target.value)} />
+                                  <button onClick={() => removeNewLinkRow(idx)}
+                                    className="text-red-400 hover:text-red-600 shrink-0">
+                                    <X size={15} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="flex gap-2">
+                              <button onClick={addNewLinkRow}
+                                className="flex items-center gap-1 text-accent hover:text-accent/80 text-xs font-semibold">
+                                <Plus size={13} />Tambah baris
+                              </button>
+                              <button onClick={() => saveAffiliateLinks(phone.id)} disabled={savingAffiliate}
+                                className="btn-primary text-xs py-1.5 px-4 flex items-center gap-1">
+                                {savingAffiliate ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                                Simpan Link
+                              </button>
+                              <button onClick={() => setEditingAffiliate(null)}
+                                className="text-ink-3 hover:text-ink text-xs px-3">
+                                Tutup
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </tbody>
             </table>

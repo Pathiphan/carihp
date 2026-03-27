@@ -143,18 +143,18 @@ function CompareContent() {
             <p className="text-accent font-bold text-sm mt-1">{formatRupiah(getDisplayPrice(phone))}</p>
             {!headerSticky && (
               <div className="flex flex-col gap-1.5 mt-3">
-                {phone.link_shopee?.map((url, i) => (
-                  <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                {phone.link_shopee && (
+                  <a href={phone.link_shopee} target="_blank" rel="noopener noreferrer"
                     className="btn-primary text-xs py-1.5 flex items-center justify-center gap-1">
-                    Shopee{phone.link_shopee!.length > 1 ? ` #${i + 1}` : ''} <ExternalLink size={10} />
+                    Shopee <ExternalLink size={10} />
                   </a>
-                ))}
-                {phone.link_tiktok?.map((url, i) => (
-                  <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                )}
+                {phone.link_tiktok && (
+                  <a href={phone.link_tiktok} target="_blank" rel="noopener noreferrer"
                     className="btn-secondary text-xs py-1.5 flex items-center justify-center gap-1">
-                    TikTok{phone.link_tiktok!.length > 1 ? ` #${i + 1}` : ''} <ExternalLink size={10} />
+                    TikTok <ExternalLink size={10} />
                   </a>
-                ))}
+                )}
                 <Link href={`/detail/${phone.slug}`}
                   className="btn-ghost text-xs border border-border rounded-lg py-1.5 text-center">
                   Detail lengkap
@@ -177,11 +177,11 @@ function CompareContent() {
               // Override for lowerBetter
               const bestIdFinal = (compare && lowerBetter)
                 ? (() => {
-                  const vals = phones.map(p => ({ id: p.id, val: Number(p[key]) })).filter(x => x.val > 0);
-                  const allSame = vals.every(v => v.val === vals[0]?.val);
-                  if (allSame || !vals.length) return null;
-                  return vals.reduce((a, b) => a.val < b.val ? a : b).id;
-                })()
+                    const vals = phones.map(p => ({ id: p.id, val: Number(p[key]) })).filter(x => x.val > 0);
+                    const allSame = vals.every(v => v.val === vals[0]?.val);
+                    if (allSame || !vals.length) return null;
+                    return vals.reduce((a, b) => a.val < b.val ? a : b).id;
+                  })()
                 : bestId;
 
               return (

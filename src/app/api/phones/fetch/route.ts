@@ -2,83 +2,64 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { slugify, usdToIdr } from '@/lib/utils';
 
-// Ambil gambar dari Google Custom Search API
-async function fetchImageFromGoogle(query: string): Promise<string> {
-  try {
-    const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
-    const cx = process.env.GOOGLE_SEARCH_CX;
-    if (!apiKey || !cx) {
-      console.error('Google Search API key atau CX tidak ada di .env.local');
-      return '';
-    }
-
-    const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(query)}&searchType=image&num=5&imgType=photo&imgSize=large`;
-    const res = await fetch(url);
-
-    if (!res.ok) {
-      const err = await res.text();
-      console.error('Google Search error:', res.status, err.slice(0, 200));
-      return '';
-    }
-
-    const data = await res.json();
-    const items = data?.items || [];
-
-    // Ambil gambar pertama yang valid
-    for (const item of items) {
-      const imgUrl: string = item.link || '';
-      if (imgUrl && imgUrl.startsWith('http')) {
-        return imgUrl;
-      }
-    }
-    return '';
-  } catch (err) {
-    console.error('Google image fetch error:', err);
-    return '';
-  }
+// Konversi slug (strip) ke format GSMArena underscore untuk URL gambar
+function slugToUnderscore(slug: string): string {
+  return slug.replace(/-/g, '_');
 }
 
-// Fetch halaman GSMArena dan extract spesifikasi
-async function fetchFromGSMArena(name: string): Promise<string> {
-  try {
-    // Search GSMArena
-    const searchUrl = `https://www.gsmarena.com/search.php3?sQuickSearch=1&sName=${encodeURIComponent(name)}`;
-    const searchRes = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
+// Download gambar dari GSMArena CDN dan upload ke Supabase Storage
+// Coba berbagai variasi slug karena GSMArena tidak konsisten
+async function uploadImageToStorage(
+  db: ReturnType<typeof supabaseAdmin>,
+  gsmarenaSlug: string
+): Promise<string> {
+  // Variasi slug yang dicoba satu per satu
+  const variants = [
+    gsmarenaSlug,                              // apple-iphone-15-pro
+    gsmarenaSlug + '-',                        // apple-iphone-15-pro- (trailing strip)
+    slugToUnderscore(gsmarenaSlug),            // apple_iphone_15_pro
+    slugToUnderscore(gsmarenaSlug) + '_',      // apple_iphone_15_pro_
+    gsmarenaSlug.replace(/^[\w]+-/, ''),       // iphone-15-pro (tanpa brand)
+  ];
 
-    if (!searchRes.ok) return '';
-    const searchHtml = await searchRes.text();
+  for (const variant of variants) {
+    try {
+      const imageUrl = `https://fdn2.gsmarena.com/vv/bigpic/${variant}.jpg`;
+      const imgRes = await fetch(imageUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://www.gsmarena.com/',
+        },
+      });
 
-    // Ambil link halaman detail pertama
-    const linkMatch = searchHtml.match(/href="([\w-]+-\d+\.php)"/);
-    if (!linkMatch) return '';
+      if (!imgRes.ok) continue;
+      const contentType = imgRes.headers.get('content-type') || '';
+      if (!contentType.includes('image')) continue;
 
-    const detailUrl = `https://www.gsmarena.com/${linkMatch[1]}`;
-    const detailRes = await fetch(detailUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html',
-      },
-    });
+      const buffer = await imgRes.arrayBuffer();
+      // Pastikan bukan gambar placeholder (ukuran terlalu kecil = placeholder)
+      if (buffer.byteLength < 5000) continue;
 
-    if (!detailRes.ok) return '';
-    const html = await detailRes.text();
+      const filename = `${gsmarenaSlug}.jpg`;
+      const { error } = await db.storage
+        .from('phone-images')
+        .upload(filename, buffer, { contentType: 'image/jpeg', upsert: true });
 
-    // Extract tabel spesifikasi (cukup bagian penting saja, max 8000 char)
-    const specStart = html.indexOf('<div id="specs-list">');
-    const specEnd = html.indexOf('</div>', specStart + 5000);
-    if (specStart === -1) return html.slice(0, 8000);
-    return html.slice(specStart, specEnd > specStart ? specEnd + 6 : specStart + 8000);
+      if (error) {
+        console.error('Upload error:', error.message);
+        continue;
+      }
 
-  } catch (err) {
-    console.error('GSMArena fetch error:', err);
-    return '';
+      console.log('Gambar berhasil dari variant:', variant);
+      return `/api/image/${filename}`;
+
+    } catch {
+      continue;
+    }
   }
+
+  console.log('Semua variasi slug gagal untuk:', gsmarenaSlug);
+  return '';
 }
 
 export async function POST(req: NextRequest) {
@@ -102,92 +83,45 @@ export async function POST(req: NextRequest) {
 
     console.log('=== FETCH HP:', name, '===');
 
-    // ── STEP 1: Fetch data dari GSMArena ─────────────────────────
-    const gsmarenaHtml = await fetchFromGSMArena(name);
-    console.log('GSMArena data:', gsmarenaHtml ? `${gsmarenaHtml.length} chars` : 'tidak ada');
+    // ── STEP 1: Gemini generate spesifikasi ───────────────────────
+    const geminiPrompt = `Specs for "${name}". Reply ONLY valid JSON, no markdown:
+{"name":"","brand":"","release_year":0,"chipset":"","ram_gb":0,"ram_type":"","storage_gb":0,"storage_type":"","battery_mah":0,"charging_watt":0,"screen_size":0.0,"screen_type":"","screen_resolution":"","refresh_rate":0,"os":"","os_skin":"","weight_gram":0,"main_camera_mp":0,"main_camera_aperture":"","main_camera_ois":true,"ultrawide_mp":0,"telephoto_mp":0,"telephoto_zoom":"","front_camera_mp":0,"front_camera_aperture":"","price_usd":0,"geekbench_single":0,"geekbench_multi":0,"antutu_score":0,"gsmarena_slug":"","category":[],"camera_features":[]}
+Rules: all numbers as number type. gsmarena_slug must start with parent brand (poco/redmi use xiaomi prefix). category from: gaming,kamera,baterai,budget,flagship,kerja. geekbench required.`;
 
-    // ── STEP 2: Groq parse spesifikasi dari HTML GSMArena ─────────
-    const prompt = gsmarenaHtml
-      ? `Ekstrak spesifikasi smartphone "${name}" dari HTML GSMArena berikut:
-
-${gsmarenaHtml.slice(0, 6000)}
-
-Kembalikan HANYA JSON valid tanpa markdown, tanpa backtick:`
-      : `Berikan spesifikasi lengkap smartphone "${name}" berdasarkan pengetahuanmu.
-Kembalikan HANYA JSON valid tanpa markdown, tanpa backtick:`;
-
-    const jsonFormat = `{
-  "name": "nama lengkap resmi",
-  "brand": "brand saja",
-  "release_year": 2025,
-  "chipset": "Snapdragon 8 Elite (3nm)",
-  "ram_gb": 12,
-  "ram_type": "LPDDR5X",
-  "storage_gb": 256,
-  "storage_type": "UFS 4.0",
-  "battery_mah": 3692,
-  "charging_watt": 30,
-  "screen_size": 6.3,
-  "screen_type": "Super Retina XDR OLED",
-  "screen_resolution": "1290x2796",
-  "refresh_rate": 60,
-  "os": "iOS 18",
-  "os_skin": "",
-  "weight_gram": 170,
-  "main_camera_mp": 48,
-  "main_camera_aperture": "f/1.6",
-  "main_camera_ois": true,
-  "ultrawide_mp": 12,
-  "telephoto_mp": 0,
-  "telephoto_zoom": "",
-  "front_camera_mp": 12,
-  "front_camera_aperture": "f/1.9",
-  "price_usd": 799,
-  "geekbench_single": 3500,
-  "geekbench_multi": 8900,
-  "antutu_score": 1600000,
-  "category": ["flagship"],
-  "camera_features": ["48MP f/1.6 OIS main", "12MP ultrawide", "12MP selfie f/1.9"]
-}
-
-Aturan penting:
-- Semua angka harus tipe number bukan string
-- battery_mah harus AKURAT sesuai spesifikasi resmi
-- geekbench_single dan geekbench_multi harus diisi berdasarkan chipset (wajib)
-- category pilih dari: gaming, kamera, baterai, budget, flagship, kerja
-- Kalau telephoto tidak ada isi 0`;
-
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const aiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://carihp.id',
+        'X-Title': 'CariHP',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'nvidia/nemotron-3-super-120b-a12b:free',
         max_tokens: 1500,
         temperature: 0.1,
         messages: [
-          {
-            role: 'system',
-            content: 'Kamu adalah parser spesifikasi smartphone yang akurat. Selalu kembalikan JSON valid tanpa teks lain.',
-          },
-          { role: 'user', content: prompt + '\n\nFormat JSON:\n' + jsonFormat },
+          { role: 'system', content: 'You are a smartphone specs database. Return only valid JSON.' },
+          { role: 'user', content: geminiPrompt },
         ],
       }),
     });
 
-    if (!groqRes.ok) {
-      const err = await groqRes.text();
-      console.error('Groq error:', groqRes.status, err.slice(0, 200));
-      return NextResponse.json({ error: 'Groq AI error: ' + groqRes.status }, { status: 502 });
+    if (!aiRes.ok) {
+      const err = await aiRes.text();
+      console.error('OpenRouter error:', aiRes.status, err.slice(0, 200));
+      return NextResponse.json({ error: 'AI error: ' + aiRes.status }, { status: 502 });
     }
 
-    const groqData = await groqRes.json();
-    const rawText = groqData.choices?.[0]?.message?.content || '';
-    console.log('Groq raw (400):', rawText.slice(0, 400));
+    const aiData = await aiRes.json();
+    // Nvidia Nemotron pakai reasoning mode - content bisa null, ambil dari reasoning
+    const msg = aiData.choices?.[0]?.message;
+    const rawText = msg?.content || 
+      msg?.reasoning_details?.find((r: {type: string; text: string}) => r.type === 'reasoning.text')?.text ||
+      msg?.reasoning || '';
+    console.log('AI raw (400):', rawText.slice(0, 400));
 
-    // Parse JSON dari response
+    // Parse JSON
     let specs: Record<string, unknown> = {};
     try {
       const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -195,34 +129,30 @@ Aturan penting:
       specs = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
     } catch {
       console.error('JSON parse error:', rawText.slice(0, 200));
-      return NextResponse.json({ error: 'Gagal parse JSON dari Groq', detail: rawText.slice(0, 200) }, { status: 502 });
+      return NextResponse.json({ error: 'Gagal parse spesifikasi', detail: rawText.slice(0, 200) }, { status: 502 });
     }
 
-    // ── STEP 3: Google Custom Search untuk gambar ─────────────────
+    // ── STEP 2: Download + upload gambar ──────────────────────────
     const finalName = (specs.name as string) || name;
-    const imageQuery = `${finalName} smartphone`;
-    console.log('Cari gambar:', imageQuery);
-    const imageUrl = await fetchImageFromGoogle(imageQuery);
-    console.log('Gambar:', imageUrl ? 'ditemukan' : 'tidak ditemukan');
+    const gsmarenaSlug = (specs.gsmarena_slug as string) || 
+      finalName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-    // ── STEP 4: Susun data dan simpan ke database ─────────────────
+    console.log('GSMArena slug:', gsmarenaSlug);
+    const imageProxyUrl = await uploadImageToStorage(db, gsmarenaSlug);
+
+    // ── STEP 3: Susun dan simpan data ─────────────────────────────
     const brand = (specs.brand as string) || finalName.split(' ')[0];
     const slug = slugify(finalName);
     const priceUsd = (specs.price_usd as number) || 0;
     const priceIdr = priceUsd ? usdToIdr(priceUsd) : 0;
 
-    // Gabungkan detail ke field yang ada
     const chipsetFull = [
       specs.chipset,
       specs.ram_type ? `RAM: ${specs.ram_type}` : null,
       specs.storage_type ? `Storage: ${specs.storage_type}` : null,
     ].filter(Boolean).join(' | ');
 
-    const screenTypeFull = [
-      specs.screen_type,
-      specs.screen_resolution,
-    ].filter(Boolean).join(', ');
-
+    const screenTypeFull = [specs.screen_type, specs.screen_resolution].filter(Boolean).join(', ');
     const osFull = [specs.os, specs.os_skin].filter(Boolean).join(', ');
 
     let cameraFeatures: string[] = [];
@@ -239,7 +169,7 @@ Aturan penting:
       name: finalName,
       brand,
       slug,
-      image_url: imageUrl,
+      image_url: imageProxyUrl,
       price_usd: priceUsd,
       price_idr: priceIdr,
       price_idr_override: null,
@@ -268,7 +198,7 @@ Aturan penting:
       link_shopee: null,
       link_tiktok: null,
       link_official: null,
-      source: 'groq_ai',
+      source: 'auto',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -289,7 +219,7 @@ Aturan penting:
       }
     }
 
-    console.log('Berhasil:', finalName, '| Gambar:', imageUrl ? 'ada' : 'kosong');
+    console.log('Berhasil:', finalName, '| Gambar:', imageProxyUrl ? 'ada' : 'kosong');
     console.log('========================');
 
     return NextResponse.json({ success: true, slug: phoneData.slug, name: finalName, cached: false });
